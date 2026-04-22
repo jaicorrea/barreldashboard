@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from scipy.stats import gaussian_kde
 from scipy.interpolate import RegularGridInterpolator
-from sklearn.neighbors import KernelDensity
 import pybaseball
 from pybaseball import statcast_batter, playerid_lookup
 import warnings
@@ -255,33 +255,14 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_barrel_kde(barrel_df: pd.DataFrame,
                      xc: np.ndarray, yc: np.ndarray) -> np.ndarray:
-    """
-    Build a 2-D barrel density grid using sklearn KernelDensity with an
-    ABSOLUTE bandwidth in feet.  This is critical: scipy's gaussian_kde scales
-    bandwidth by the data std, so 2-3 tightly-clustered barrels produce a
-    kernel only ~1-2 inches wide — too narrow to catch any pitch location.
-    sklearn's bandwidth is in the same units as the data (feet), so even a
-    single barrel produces a meaningful hot zone (~5-inch radius at threshold=0.40).
-
-    Bandwidth formula:  0.35 + 0.15 / sqrt(n)
-      n=1  → 0.50 ft  (≈6-inch hot-zone radius per barrel)
-      n=5  → 0.42 ft
-      n=20 → 0.38 ft
-      n=50 → 0.37 ft   (smoothly converges; always ≥ 0.35 ft)
-    """
-    x = barrel_df["plate_x"].dropna().values
-    y = barrel_df["plate_z"].dropna().values
-    n = len(x)
-    if n < 1:
+    x, y = barrel_df["plate_x"].dropna().values, barrel_df["plate_z"].dropna().values
+    if len(x) < 5:
         return np.zeros((len(yc), len(xc)))
     try:
-        bw = 0.35 + 0.15 / max(n ** 0.5, 1)
-        kde = KernelDensity(kernel="gaussian", bandwidth=bw)
-        kde.fit(np.column_stack([x, y]))
+        kde = gaussian_kde(np.vstack([x, y]), bw_method="scott")
         xx, yy = np.meshgrid(xc, yc)
-        pts = np.column_stack([xx.ravel(), yy.ravel()])
-        z = np.exp(kde.score_samples(pts)).reshape(xx.shape)
-        return (z / z.max()) if z.max() > 0 else z
+        z = kde(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+        return z / z.max()
     except Exception:
         return np.zeros((len(yc), len(xc)))
 
@@ -332,8 +313,8 @@ def player_metrics(first: str, last: str, season: int,
     batted_df = df[df["type"] == "X"].dropna(subset=["launch_speed", "launch_angle"])
     barrel_df = batted_df[batted_df["is_barrel"]]
 
-    # Minimum 100 PA filter (approximate via pitches seen)
-    if len(pitch_df) < 50:    # very low floor — career threshold is enforced by PLAYERS dict
+    # Require at least 5 barrels — fewer than that produces a degenerate KDE
+    if len(barrel_df) < 5:
         return None
 
     kde_grid = build_barrel_kde(barrel_df, XC, YC)
