@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from scipy.stats import gaussian_kde
 from scipy.interpolate import RegularGridInterpolator
+from sklearn.neighbors import KernelDensity
 import pybaseball
 from pybaseball import statcast_batter, playerid_lookup
 import warnings
@@ -255,14 +255,33 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_barrel_kde(barrel_df: pd.DataFrame,
                      xc: np.ndarray, yc: np.ndarray) -> np.ndarray:
-    x, y = barrel_df["plate_x"].values, barrel_df["plate_z"].values
-    if len(x) < 5:
+    """
+    Build a 2-D barrel density grid using sklearn KernelDensity with an
+    ABSOLUTE bandwidth in feet.  This is critical: scipy's gaussian_kde scales
+    bandwidth by the data std, so 2-3 tightly-clustered barrels produce a
+    kernel only ~1-2 inches wide — too narrow to catch any pitch location.
+    sklearn's bandwidth is in the same units as the data (feet), so even a
+    single barrel produces a meaningful hot zone (~5-inch radius at threshold=0.40).
+
+    Bandwidth formula:  0.35 + 0.15 / sqrt(n)
+      n=1  → 0.50 ft  (≈6-inch hot-zone radius per barrel)
+      n=5  → 0.42 ft
+      n=20 → 0.38 ft
+      n=50 → 0.37 ft   (smoothly converges; always ≥ 0.35 ft)
+    """
+    x = barrel_df["plate_x"].dropna().values
+    y = barrel_df["plate_z"].dropna().values
+    n = len(x)
+    if n < 1:
         return np.zeros((len(yc), len(xc)))
     try:
-        kde = gaussian_kde(np.vstack([x, y]), bw_method="scott")
+        bw = 0.35 + 0.15 / max(n ** 0.5, 1)
+        kde = KernelDensity(kernel="gaussian", bandwidth=bw)
+        kde.fit(np.column_stack([x, y]))
         xx, yy = np.meshgrid(xc, yc)
-        z = kde(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
-        return z / z.max()
+        pts = np.column_stack([xx.ravel(), yy.ravel()])
+        z = np.exp(kde.score_samples(pts)).reshape(xx.shape)
+        return (z / z.max()) if z.max() > 0 else z
     except Exception:
         return np.zeros((len(yc), len(xc)))
 
