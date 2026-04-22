@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
 from scipy.interpolate import RegularGridInterpolator
+from concurrent.futures import ThreadPoolExecutor
 import pybaseball
 from pybaseball import statcast_batter, playerid_lookup
 import warnings
@@ -216,7 +217,7 @@ PLAYERS = {
     "Yordan Alvarez":           {"first": "Yordan",      "last": "Alvarez"},
 }
 
-SEASONS = [2021, 2022, 2023, 2024, 2025]
+SEASONS = list(range(2015, 2026))
 
 SWING_EVENTS = {
     "hit_into_play", "swinging_strike", "swinging_strike_blocked",
@@ -302,62 +303,74 @@ def make_zone_rect() -> dict:
         layer="above",
     )
 
-def player_metrics(first: str, last: str, season: int,
-                   kde_threshold: float) -> dict | None:
-    """Compute per-player leaderboard row. Returns None if insufficient data."""
-    raw = load_statcast(first, last, season)
-    if raw is None or raw.empty:
+@st.cache_data(show_spinner=False, ttl=86400)   # IDs don't change — 24 h TTL
+def get_player_id_map() -> dict:
+    """Resolve every player name to its MLBAM ID in a single pass.
+    Subsequent calls within 24 h hit the cache instantly."""
+    result = {}
+    for name, info in PLAYERS.items():
+        try:
+            lkp = playerid_lookup(info["last"], info["first"])
+            if not lkp.empty:
+                result[name] = int(lkp.iloc[0]["key_mlbam"])
+        except Exception:
+            pass
+    return result
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _fetch_by_id(mlbam_id: int, season: int) -> pd.DataFrame:
+    """Fetch one player-season from Statcast by numeric ID (no lookup overhead)."""
+    return statcast_batter(f"{season}-03-01", f"{season}-11-30", mlbam_id)
+
+def _compute_row(args) -> dict | None:
+    """Pure function — called in a thread-pool worker."""
+    name, mlbam_id, season, kde_threshold = args
+    try:
+        raw = _fetch_by_id(mlbam_id, season)
+        if raw is None or raw.empty:
+            return None
+        df        = classify(raw)
+        pitch_df  = df.dropna(subset=["plate_x", "plate_z"])
+        batted_df = df[df["type"] == "X"].dropna(subset=["launch_speed", "launch_angle"])
+        barrel_df = batted_df[batted_df["is_barrel"]]
+        if len(barrel_df) < 5:
+            return None
+        kde_grid  = build_barrel_kde(barrel_df, XC, YC)
+        in_hot    = in_barrel_kde_zone(pitch_df, kde_grid, XC, YC, kde_threshold)
+        hot_df    = pitch_df[in_hot]
+        cold_df   = pitch_df[~in_hot]
+        swing_in  = hot_df["is_swing"].mean()  * 100 if len(hot_df)  >= 10 else np.nan
+        swing_out = cold_df["is_swing"].mean() * 100 if len(cold_df) >= 10 else np.nan
+        diff      = swing_in - swing_out if not (np.isnan(swing_in) or np.isnan(swing_out)) else np.nan
+        woba = np.nan
+        if "woba_value" in pitch_df.columns and "woba_denom" in pitch_df.columns:
+            denom = pitch_df["woba_denom"].sum(skipna=True)
+            if denom > 0:
+                woba = pitch_df["woba_value"].sum(skipna=True) / denom
+        return {
+            "Player":                     name,
+            "Swing% In Barrel Zone":      swing_in,
+            "Swing% Outside Barrel Zone": swing_out,
+            "Difference":                 diff,
+            "wOBA":                       woba,
+        }
+    except Exception:
         return None
-    df        = classify(raw)
-    pitch_df  = df.dropna(subset=["plate_x", "plate_z"])
-    batted_df = df[df["type"] == "X"].dropna(subset=["launch_speed", "launch_angle"])
-    barrel_df = batted_df[batted_df["is_barrel"]]
-
-    # Require at least 5 barrels — fewer than that produces a degenerate KDE
-    if len(barrel_df) < 5:
-        return None
-
-    kde_grid = build_barrel_kde(barrel_df, XC, YC)
-    in_hot   = in_barrel_kde_zone(pitch_df, kde_grid, XC, YC, kde_threshold)
-    hot_df   = pitch_df[in_hot]
-    cold_df  = pitch_df[~in_hot]
-
-    swing_in  = hot_df["is_swing"].mean()  * 100 if len(hot_df)  >= 10 else np.nan
-    swing_out = cold_df["is_swing"].mean() * 100 if len(cold_df) >= 10 else np.nan
-    diff      = (swing_in - swing_out) if not (np.isnan(swing_in) or np.isnan(swing_out)) else np.nan
-
-    # wOBA from Statcast woba_value / woba_denom columns
-    woba = np.nan
-    if "woba_value" in pitch_df.columns and "woba_denom" in pitch_df.columns:
-        denom = pitch_df["woba_denom"].sum(skipna=True)
-        if denom > 0:
-            woba = pitch_df["woba_value"].sum(skipna=True) / denom
-
-    return {
-        "swing_in":  swing_in,
-        "swing_out": swing_out,
-        "diff":      diff,
-        "woba":      woba,
-    }
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def build_leaderboard(season: int, kde_threshold: float) -> pd.DataFrame:
-    rows = []
-    for name, info in PLAYERS.items():
-        m = player_metrics(info["first"], info["last"], season, kde_threshold)
-        if m is None:
-            continue
-        rows.append({
-            "Player":                   name,
-            "Swing% In Barrel Zone":    m["swing_in"],
-            "Swing% Outside Barrel Zone": m["swing_out"],
-            "Difference":               m["diff"],
-            "wOBA":                     m["woba"],
-        })
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("Difference", ascending=False).reset_index(drop=True)
-    return df
+    """Fetch and score all players in parallel using a thread pool.
+    I/O-bound statcast calls overlap; CPU work (KDE) is light enough per player.
+    All per-player fetches are individually cached, so cache hits are instant."""
+    id_map = get_player_id_map()
+    work   = [(name, mid, season, kde_threshold)
+              for name, mid in id_map.items() if name in PLAYERS]
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        rows = [r for r in pool.map(_compute_row, work) if r is not None]
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("Difference", ascending=False).reset_index(drop=True)
+    return out
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 st.sidebar.title("⚾ Controls")
@@ -712,16 +725,16 @@ with tab_lb:
         )
         st.plotly_chart(fig_lb, use_container_width=True)
 
-        # ── Scatter: Swing% In vs wOBA ────────────────────────────────────────
-        st.subheader("Swing% In Barrel Zone vs wOBA")
-        plot_df = lb_df.dropna(subset=["Swing% In Barrel Zone", "wOBA"])
+        # ── Scatter: Difference vs wOBA ───────────────────────────────────────
+        st.subheader("Difference vs wOBA")
+        plot_df = lb_df.dropna(subset=["Difference", "wOBA"])
         if not plot_df.empty:
             fig_sc = go.Figure()
             fig_sc.add_trace(go.Scatter(
-                x=plot_df["Swing% In Barrel Zone"],
+                x=plot_df["Difference"],
                 y=plot_df["wOBA"],
                 mode="markers+text",
-                text=plot_df["Player"].str.split().str[-1],   # last name
+                text=plot_df["Player"].str.split().str[-1],
                 textposition="top center",
                 textfont=dict(size=9, color="#a6adc8"),
                 marker=dict(
@@ -733,18 +746,20 @@ with tab_lb:
                 ),
                 hovertemplate=(
                     "<b>%{customdata[0]}</b><br>"
-                    "Swing% In: %{x:.1f}%<br>"
+                    "Difference: %{x:+.1f}%<br>"
                     "wOBA: %{y:.3f}<br>"
-                    "Difference: %{customdata[1]:+.1f}%<extra></extra>"
+                    "Swing% In: %{customdata[1]:.1f}%<br>"
+                    "Swing% Out: %{customdata[2]:.1f}%<extra></extra>"
                 ),
-                customdata=plot_df[["Player", "Difference"]].values,
+                customdata=plot_df[["Player", "Swing% In Barrel Zone", "Swing% Outside Barrel Zone"]].values,
             ))
+            fig_sc.add_vline(x=0, line_dash="dash", line_color="#a6adc8", line_width=1)
             fig_sc.update_layout(
-                xaxis_title="Swing% In Barrel Zone",
+                xaxis_title="Difference (Swing% In Barrel Zone − Swing% Outside)",
                 yaxis_title="wOBA",
                 paper_bgcolor="#1e1e2e", plot_bgcolor="#181825",
                 font=dict(color="white"),
                 height=480, margin=dict(l=60, r=40, t=30, b=60),
             )
             st.plotly_chart(fig_sc, use_container_width=True)
-            st.caption("Dot colour = Difference (green = swings more in barrel zone than out; red = reverse)")
+            st.caption("Green = swings more in barrel zone than out · Vertical line = zero difference")
