@@ -650,80 +650,38 @@ with tab_lb:
     if lb_df.empty:
         st.warning("No data returned. Try a different season or lower the hot-zone threshold.")
     else:
-        # ── Rank column ───────────────────────────────────────────────────────
-        lb_df.insert(0, "Rank", range(1, len(lb_df) + 1))
+        # ── Sortable leaderboard table ────────────────────────────────────────
+        # st.dataframe gives native click-to-sort on every column header.
+        # A pandas Styler colours the Difference cell without converting
+        # the column to strings (which would break numeric sort order).
 
-        # ── Plotly table (dark theme, colour-coded Difference) ────────────────
-        diff_colors = [
-            "#a6e3a1" if v > 0 else "#f38ba8" if v < 0 else "#a6adc8"
-            for v in lb_df["Difference"].fillna(0)
-        ]
+        def _diff_bg(val):
+            """Cell background for the Difference column."""
+            if pd.isna(val):
+                return ""
+            return ("background-color: rgba(166,227,161,0.30); color: #a6e3a1"
+                    if val > 0 else
+                    "background-color: rgba(243,139,168,0.30); color: #f38ba8")
 
-        header_vals = ["Rank", "Player",
-                       "Swing%<br>In Barrel Zone",
-                       "Swing%<br>Outside Barrel Zone",
-                       "Difference",
-                       "wOBA"]
+        styled_lb = lb_df.style.map(_diff_bg, subset=["Difference"])
 
-        def fmt_pct(col):
-            return [f"{v:.1f}%" if not np.isnan(v) else "—" for v in lb_df[col]]
-
-        def fmt_woba(col):
-            return [f"{v:.3f}" if not np.isnan(v) else "—" for v in lb_df[col]]
-
-        def fmt_diff(col):
-            return [f"{v:+.1f}%" if not np.isnan(v) else "—" for v in lb_df[col]]
-
-        cell_vals = [
-            lb_df["Rank"].tolist(),
-            lb_df["Player"].tolist(),
-            fmt_pct("Swing% In Barrel Zone"),
-            fmt_pct("Swing% Outside Barrel Zone"),
-            fmt_diff("Difference"),
-            fmt_woba("wOBA"),
-        ]
-        cell_colors = [
-            ["#181825"] * len(lb_df),
-            ["#1e1e2e"] * len(lb_df),
-            ["#1e1e2e"] * len(lb_df),
-            ["#1e1e2e"] * len(lb_df),
-            diff_colors,
-            ["#1e1e2e"] * len(lb_df),
-        ]
-        cell_font_colors = [
-            ["#cba6f7"] * len(lb_df),
-            ["white"]   * len(lb_df),
-            ["#89b4fa"] * len(lb_df),
-            ["#89b4fa"] * len(lb_df),
-            ["#181825"] * len(lb_df),   # dark text on coloured bg
-            ["#f9e2af"] * len(lb_df),
-        ]
-
-        fig_lb = go.Figure(go.Table(
-            columnwidth=[40, 160, 130, 160, 110, 80],
-            header=dict(
-                values=header_vals,
-                fill_color="#313244",
-                font=dict(color="white", size=12),
-                align=["center", "left", "center", "center", "center", "center"],
-                line_color="#45475a",
-                height=36,
-            ),
-            cells=dict(
-                values=cell_vals,
-                fill_color=cell_colors,
-                font=dict(color=cell_font_colors, size=12),
-                align=["center", "left", "center", "center", "center", "center"],
-                line_color="#313244",
-                height=30,
-            ),
-        ))
-        fig_lb.update_layout(
-            paper_bgcolor="#1e1e2e",
-            margin=dict(l=0, r=0, t=10, b=10),
-            height=max(400, 36 + len(lb_df) * 30 + 20),
+        st.dataframe(
+            styled_lb,
+            use_container_width=True,
+            hide_index=True,
+            height=min(700, 36 + len(lb_df) * 35),
+            column_config={
+                "Player":                     st.column_config.TextColumn("Player"),
+                "Swing% In Barrel Zone":      st.column_config.NumberColumn(
+                    "Swing% In Barrel Zone", format="%.1f%%"),
+                "Swing% Outside Barrel Zone": st.column_config.NumberColumn(
+                    "Swing% Outside Barrel Zone", format="%.1f%%"),
+                "Difference":                 st.column_config.NumberColumn(
+                    "Difference", format="%+.1f%%"),
+                "wOBA":                       st.column_config.NumberColumn(
+                    "wOBA", format="%.3f"),
+            },
         )
-        st.plotly_chart(fig_lb, use_container_width=True)
 
         # ── Scatter: Difference vs wOBA ───────────────────────────────────────
         st.subheader("Difference vs wOBA")
