@@ -342,6 +342,7 @@ def _compute_row(args) -> dict | None:
         swing_in  = hot_df["is_swing"].mean()  * 100 if len(hot_df)  >= 10 else np.nan
         swing_out = cold_df["is_swing"].mean() * 100 if len(cold_df) >= 10 else np.nan
         diff      = swing_in - swing_out if not (np.isnan(swing_in) or np.isnan(swing_out)) else np.nan
+        swing_pct = pitch_df["is_swing"].mean() * 100 if len(pitch_df) >= 10 else np.nan
         woba = np.nan
         if "woba_value" in pitch_df.columns and "woba_denom" in pitch_df.columns:
             denom = pitch_df["woba_denom"].sum(skipna=True)
@@ -349,6 +350,7 @@ def _compute_row(args) -> dict | None:
                 woba = pitch_df["woba_value"].sum(skipna=True) / denom
         return {
             "Player":                     name,
+            "Swing%":                     swing_pct,
             "Swing% In Barrel Zone":      swing_in,
             "Swing% Outside Barrel Zone": swing_out,
             "Difference":                 diff,
@@ -672,6 +674,8 @@ with tab_lb:
             height=min(700, 36 + len(lb_df) * 35),
             column_config={
                 "Player":                     st.column_config.TextColumn("Player"),
+                "Swing%":                     st.column_config.NumberColumn(
+                    "Swing%", format="%.1f%%"),
                 "Swing% In Barrel Zone":      st.column_config.NumberColumn(
                     "Swing% In Barrel Zone", format="%.1f%%"),
                 "Swing% Outside Barrel Zone": st.column_config.NumberColumn(
