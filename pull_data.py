@@ -9,12 +9,16 @@ barrel_data.parquet in this folder.
 Run:  python pull_data.py
 """
 
+import time
+
 import numpy as np
 import pandas as pd
 import pybaseball
 from pybaseball import statcast_batter, playerid_lookup
 
 pybaseball.cache.enable()
+
+MAX_RETRIES = 3
 
 # ── Seasons ────────────────────────────────────────────────────────────────────
 SEASONS = [2023, 2024, 2025]
@@ -25,7 +29,7 @@ PLAYERS = {
     "Adam Duvall":              {"first": "Adam",        "last": "Duvall"},
     "Adam Frazier":             {"first": "Adam",        "last": "Frazier"},
     "Adley Rutschman":          {"first": "Adley",       "last": "Rutschman"},
-    "Adolis Garcia":            {"first": "Adolis",      "last": "Garcia"},
+    "Adolis Garcia":            {"first": "Adolis",      "last": "Garcia",    "mlbam_id": 666969},
     "Alejandro Kirk":           {"first": "Alejandro",   "last": "Kirk"},
     "Alec Bohm":                {"first": "Alec",        "last": "Bohm"},
     "Alex Bregman":             {"first": "Alex",        "last": "Bregman"},
@@ -50,7 +54,7 @@ PLAYERS = {
     "Christian Walker":         {"first": "Christian",   "last": "Walker"},
     "Christian Yelich":         {"first": "Christian",   "last": "Yelich"},
     "CJ Abrams":                {"first": "CJ",          "last": "Abrams"},
-    "CJ Cron":                  {"first": "CJ",          "last": "Cron"},
+    "CJ Cron":                  {"first": "CJ",          "last": "Cron",      "mlbam_id": 543068},
     "Cody Bellinger":           {"first": "Cody",        "last": "Bellinger"},
     "Corey Seager":             {"first": "Corey",       "last": "Seager"},
     "Dansby Swanson":           {"first": "Dansby",      "last": "Swanson"},
@@ -59,10 +63,10 @@ PLAYERS = {
     "Dylan Carlson":            {"first": "Dylan",       "last": "Carlson"},
     "Eddie Rosario":            {"first": "Eddie",       "last": "Rosario"},
     "Eduardo Escobar":          {"first": "Eduardo",     "last": "Escobar"},
-    "Eloy Jimenez":             {"first": "Eloy",        "last": "Jimenez"},
+    "Eloy Jimenez":             {"first": "Eloy",        "last": "Jimenez",   "mlbam_id": 650391},
     "Elly De La Cruz":          {"first": "Elly",        "last": "De La Cruz"},
-    "Eugenio Suarez":           {"first": "Eugenio",     "last": "Suarez"},
-    "Fernando Tatis Jr.":       {"first": "Fernando",    "last": "Tatis"},
+    "Eugenio Suarez":           {"first": "Eugenio",     "last": "Suarez",    "mlbam_id": 553993},
+    "Fernando Tatis Jr.":       {"first": "Fernando",    "last": "Tatis",     "mlbam_id": 665487},
     "Francisco Lindor":         {"first": "Francisco",   "last": "Lindor"},
     "Freddie Freeman":          {"first": "Freddie",     "last": "Freeman"},
     "Gavin Lux":                {"first": "Gavin",       "last": "Lux"},
@@ -77,30 +81,30 @@ PLAYERS = {
     "Ian Happ":                 {"first": "Ian",         "last": "Happ"},
     "Isaac Paredes":            {"first": "Isaac",       "last": "Paredes"},
     "Isiah Kiner-Falefa":       {"first": "Isiah",       "last": "Kiner-Falefa"},
-    "J.D. Martinez":            {"first": "J.D.",        "last": "Martinez"},
+    "J.D. Martinez":            {"first": "J.D.",        "last": "Martinez",  "mlbam_id": 502110},
     "Jackson Chourio":          {"first": "Jackson",     "last": "Chourio"},
     "Jackson Merrill":          {"first": "Jackson",     "last": "Merrill"},
     "Jake Cronenworth":         {"first": "Jake",        "last": "Cronenworth"},
     "Jake Fraley":              {"first": "Jake",        "last": "Fraley"},
     "Jarred Kelenic":           {"first": "Jarred",      "last": "Kelenic"},
     "Jarren Duran":             {"first": "Jarren",      "last": "Duran"},
-    "Javier Baez":              {"first": "Javier",      "last": "Baez"},
+    "Javier Baez":              {"first": "Javier",      "last": "Baez",      "mlbam_id": 595879},
     "Jazz Chisholm Jr.":        {"first": "Jazz",        "last": "Chisholm"},
     "Jeff McNeil":              {"first": "Jeff",        "last": "McNeil"},
     "Jeimer Candelario":        {"first": "Jeimer",      "last": "Candelario"},
-    "Jeremy Pena":              {"first": "Jeremy",      "last": "Pena"},
+    "Jeremy Pena":              {"first": "Jeremy",      "last": "Pena",      "mlbam_id": 665161},
     "Jesse Winker":             {"first": "Jesse",       "last": "Winker"},
     "Joc Pederson":             {"first": "Joc",         "last": "Pederson"},
     "Joey Gallo":               {"first": "Joey",        "last": "Gallo"},
     "Jonah Heim":               {"first": "Jonah",       "last": "Heim"},
     "Jonathan India":           {"first": "Jonathan",    "last": "India"},
     "Jorge Soler":              {"first": "Jorge",       "last": "Soler"},
-    "Jose Abreu":               {"first": "Jose",        "last": "Abreu"},
-    "Jose Altuve":              {"first": "Jose",        "last": "Altuve"},
-    "Jose Ramirez":             {"first": "Jose",        "last": "Ramirez"},
-    "JP Crawford":              {"first": "J.P.",        "last": "Crawford"},
+    "Jose Abreu":               {"first": "Jose",        "last": "Abreu",     "mlbam_id": 547989},
+    "Jose Altuve":              {"first": "Jose",        "last": "Altuve",    "mlbam_id": 514888},
+    "Jose Ramirez":             {"first": "Jose",        "last": "Ramirez",   "mlbam_id": 608070},
+    "JP Crawford":              {"first": "J.P.",        "last": "Crawford",  "mlbam_id": 641487},
     "Juan Soto":                {"first": "Juan",        "last": "Soto"},
-    "Julio Rodriguez":          {"first": "Julio",       "last": "Rodriguez"},
+    "Julio Rodriguez":          {"first": "Julio",       "last": "Rodriguez", "mlbam_id": 677594},
     "Jurickson Profar":         {"first": "Jurickson",   "last": "Profar"},
     "Ke'Bryan Hayes":           {"first": "Ke'Bryan",    "last": "Hayes"},
     "Ketel Marte":              {"first": "Ketel",       "last": "Marte"},
@@ -111,7 +115,7 @@ PLAYERS = {
     "Lane Thomas":              {"first": "Lane",        "last": "Thomas"},
     "Lars Nootbaar":            {"first": "Lars",        "last": "Nootbaar"},
     "Lourdes Gurriel Jr.":      {"first": "Lourdes",     "last": "Gurriel"},
-    "Luis Arraez":              {"first": "Luis",        "last": "Arraez"},
+    "Luis Arraez":              {"first": "Luis",        "last": "Arraez",    "mlbam_id": 650333},
     "Luis Rengifo":             {"first": "Luis",        "last": "Rengifo"},
     "Luis Robert":              {"first": "Luis",        "last": "Robert"},
     "Luke Voit":                {"first": "Luke",        "last": "Voit"},
@@ -137,13 +141,13 @@ PLAYERS = {
     "Paul Goldschmidt":         {"first": "Paul",        "last": "Goldschmidt"},
     "Pete Alonso":              {"first": "Pete",        "last": "Alonso"},
     "Rafael Devers":            {"first": "Rafael",      "last": "Devers"},
-    "Ramon Laureano":           {"first": "Ramon",       "last": "Laureano"},
+    "Ramon Laureano":           {"first": "Ramon",       "last": "Laureano",  "mlbam_id": 657656},
     "Randy Arozarena":          {"first": "Randy",       "last": "Arozarena"},
-    "Ronald Acuna Jr.":         {"first": "Ronald",      "last": "Acuna"},
+    "Ronald Acuna Jr.":         {"first": "Ronald",      "last": "Acuna",     "mlbam_id": 660670},
     "Rowdy Tellez":             {"first": "Rowdy",       "last": "Tellez"},
     "Ryan McMahon":             {"first": "Ryan",        "last": "McMahon"},
     "Ryan Mountcastle":         {"first": "Ryan",        "last": "Mountcastle"},
-    "Salvador Perez":           {"first": "Salvador",    "last": "Perez"},
+    "Salvador Perez":           {"first": "Salvador",    "last": "Perez",     "mlbam_id": 521692},
     "Sean Murphy":              {"first": "Sean",        "last": "Murphy"},
     "Seiya Suzuki":             {"first": "Seiya",       "last": "Suzuki"},
     "Shohei Ohtani":            {"first": "Shohei",      "last": "Ohtani"},
@@ -152,7 +156,7 @@ PLAYERS = {
     "Starling Marte":           {"first": "Starling",    "last": "Marte"},
     "Steven Kwan":              {"first": "Steven",      "last": "Kwan"},
     "Taylor Ward":              {"first": "Taylor",      "last": "Ward"},
-    "Teoscar Hernandez":        {"first": "Teoscar",     "last": "Hernandez"},
+    "Teoscar Hernandez":        {"first": "Teoscar",     "last": "Hernandez", "mlbam_id": 606192},
     "Tim Anderson":             {"first": "Tim",         "last": "Anderson"},
     "TJ Friedl":                {"first": "TJ",          "last": "Friedl"},
     "Tommy Edman":              {"first": "Tommy",       "last": "Edman"},
@@ -164,16 +168,16 @@ PLAYERS = {
     "Ty France":                {"first": "Ty",          "last": "France"},
     "Tyler O'Neill":            {"first": "Tyler",       "last": "O'Neill"},
     "Tyler Stephenson":         {"first": "Tyler",       "last": "Stephenson"},
-    "Victor Robles":            {"first": "Victor",      "last": "Robles"},
+    "Victor Robles":            {"first": "Victor",      "last": "Robles",    "mlbam_id": 645302},
     "Vladimir Guerrero Jr.":    {"first": "Vladimir",    "last": "Guerrero"},
     "Whit Merrifield":          {"first": "Whit",        "last": "Merrifield"},
-    "Will Smith":               {"first": "Will",        "last": "Smith"},
+    "Will Smith":               {"first": "Will",        "last": "Smith",     "mlbam_id": 669257},
     "Willson Contreras":        {"first": "Willson",     "last": "Contreras"},
     "Willy Adames":             {"first": "Willy",       "last": "Adames"},
     "Wilmer Flores":            {"first": "Wilmer",      "last": "Flores"},
     "Xander Bogaerts":          {"first": "Xander",      "last": "Bogaerts"},
-    "Yandy Diaz":               {"first": "Yandy",       "last": "Diaz"},
-    "Yordan Alvarez":           {"first": "Yordan",      "last": "Alvarez"},
+    "Yandy Diaz":               {"first": "Yandy",       "last": "Diaz",      "mlbam_id": 650490},
+    "Yordan Alvarez":           {"first": "Yordan",      "last": "Alvarez",   "mlbam_id": 670541},
 }
 
 SWING_EVENTS = {
@@ -204,6 +208,21 @@ def classify(df: pd.DataFrame, player_name: str, season: int) -> pd.DataFrame:
     return df
 
 
+def pull_with_retries(season, mlbam_id, label):
+    """Pulls one player-season, retrying up to MAX_RETRIES times on empty/error."""
+    last_raw = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            raw = statcast_batter(f"{season}-03-01", f"{season}-11-30", mlbam_id)
+            if raw is not None and not raw.empty:
+                return raw
+            print(f"  [empty attempt {attempt}]  {label}")
+        except Exception as e:
+            print(f"  [error attempt {attempt}]  {label}: {e}")
+        time.sleep(2 ** attempt)  # exponential backoff: 2s, 4s, 8s
+    return last_raw
+
+
 # ── Pull loop ──────────────────────────────────────────────────────────────────
 OUT_PATH = "C:/Users/jaico/baseball/barrel_data.parquet"
 
@@ -215,30 +234,31 @@ skipped = []
 print(f"Pulling {len(PLAYERS)} players × {len(SEASONS)} seasons = {total} requests\n")
 
 for player_name, info in PLAYERS.items():
-    # Resolve MLBAM ID once per player
-    try:
-        lkp = playerid_lookup(info["last"], info["first"])
-        if lkp.empty:
-            print(f"  [no ID]  {player_name}")
+    # Use hardcoded mlbam_id if provided, otherwise resolve via lookup
+    if "mlbam_id" in info:
+        mlbam_id = info["mlbam_id"]
+    else:
+        try:
+            lkp = playerid_lookup(info["last"], info["first"])
+            if lkp.empty:
+                print(f"  [no ID]  {player_name}")
+                skipped.append(player_name)
+                done += len(SEASONS)
+                continue
+            mlbam_id = int(lkp.iloc[0]["key_mlbam"])
+        except Exception as e:
+            print(f"  [lookup error] {player_name}: {e}")
             skipped.append(player_name)
             done += len(SEASONS)
             continue
-        mlbam_id = int(lkp.iloc[0]["key_mlbam"])
-    except Exception as e:
-        print(f"  [lookup error] {player_name}: {e}")
-        skipped.append(player_name)
-        done += len(SEASONS)
-        continue
 
     for season in SEASONS:
         done += 1
         pct   = done / total * 100
         label = f"[{done:>3}/{total}] {pct:5.1f}%  {player_name} {season}"
         try:
-            raw = statcast_batter(
-                f"{season}-03-01", f"{season}-11-30", mlbam_id
-            )
-            if raw is None or raw.empty:
+            raw = pull_with_retries(season, mlbam_id, label)
+            if raw is None or (hasattr(raw, 'empty') and raw.empty):
                 print(f"  [empty]  {label}")
                 continue
             df = classify(raw, player_name, season)

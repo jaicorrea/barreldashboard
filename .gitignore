@@ -1,0 +1,6 @@
+barrel_data.parquet
+__pycache__/
+*.pyc
+.Rhistory
+pull_log.txt
+pa_coverage_check.csv
